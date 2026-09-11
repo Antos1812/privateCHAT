@@ -37,6 +37,27 @@
     color: #eee;
     margin-right: 8px;
   }
+  #password-input {
+    padding: 10px 14px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #2a2b33;
+    color: #eee;
+    margin-right: 8px;
+  }
+  #auth-error {
+    color: #f28b82;
+    font-size: 13px;
+    min-height: 18px;
+    margin: 10px 0 0 0;
+  }
+  #auth-hint {
+    color: #777;
+    font-size: 12px;
+    max-width: 320px;
+    margin: 4px auto 0 auto;
+  }
   #join-btn {
     padding: 10px 18px;
     font-size: 16px;
@@ -228,6 +249,13 @@
       font-size: 16px;
       padding: 12px 14px;
       width: 100%;
+      margin: 0 0 10px 0;
+      display: block;
+    }
+    #password-input {
+      font-size: 16px;
+      padding: 12px 14px;
+      width: 100%;
       margin: 0 0 12px 0;
       display: block;
     }
@@ -246,7 +274,10 @@
     <h1>💬 WIADO</h1>
     <p>Wybierz nazwę</p>
     <input id="name-input" placeholder="Nazwa" maxlength="20" />
+    <input id="password-input" type="password" placeholder="Hasło" />
     <button id="join-btn">Wbijaj</button>
+    <p id="auth-error"></p>
+    <p id="auth-hint">Pierwsze logowanie zakłada konto na tę nazwę — zapamiętaj hasło!</p>
   </div>
 
   <!-- Screen 2: the actual chat -->
@@ -281,7 +312,9 @@
     const joinScreen = document.getElementById("join-screen");
     const chatScreen = document.getElementById("chat-screen");
     const nameInput = document.getElementById("name-input");
+    const passwordInput = document.getElementById("password-input");
     const joinBtn = document.getElementById("join-btn");
+    const authError = document.getElementById("auth-error");
     const messages = document.getElementById("messages");
     const msgInput = document.getElementById("msg-input");
     const sendBtn = document.getElementById("send-btn");
@@ -364,9 +397,23 @@
 
     function join() {
       const name = nameInput.value.trim();
-      if (!name) return;
-      myName = name;
-      socket.emit("join", name);
+      const password = passwordInput.value;
+      if (!name || !password) {
+        authError.textContent = "Podaj nazwę i hasło.";
+        return;
+      }
+      authError.textContent = "";
+      joinBtn.disabled = true;
+      socket.emit("auth", { username: name, password });
+    }
+
+    socket.on("auth error", (message) => {
+      authError.textContent = message;
+      joinBtn.disabled = false;
+    });
+
+    socket.on("auth success", (displayName) => {
+      myName = displayName;
       joinScreen.style.display = "none";
       chatScreen.style.display = "flex";
       msgInput.focus();
@@ -375,7 +422,7 @@
       if ("Notification" in window && Notification.permission === "default") {
         Notification.requestPermission();
       }
-    }
+    });
 
     // Show a popup notification only when the person isn't looking at the tab
     function notify(title, body) {
@@ -396,6 +443,9 @@
 
     joinBtn.addEventListener("click", join);
     nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") passwordInput.focus();
+    });
+    passwordInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") join();
     });
 
