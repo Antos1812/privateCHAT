@@ -93,6 +93,23 @@
     margin-top: 6px;
     cursor: pointer;
   }
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.9);
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    cursor: zoom-out;
+    padding: 20px;
+  }
+  #lightbox.active { display: flex; }
+  #lightbox img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+  }
   .system {
     text-align: center;
     color: #777;
@@ -253,6 +270,10 @@
     </div>
   </div>
 
+  <div id="lightbox">
+    <img id="lightbox-img" src="" alt="full size" />
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
@@ -271,6 +292,15 @@
     const imagePreviewBar = document.getElementById("image-preview-bar");
     const imagePreview = document.getElementById("image-preview");
     const cancelImageBtn = document.getElementById("cancel-image-btn");
+    const lightbox = document.getElementById("lightbox");
+    const lightboxImg = document.getElementById("lightbox-img");
+
+    lightbox.addEventListener("click", () => lightbox.classList.remove("active"));
+
+    function openLightbox(src) {
+      lightboxImg.src = src;
+      lightbox.classList.add("active");
+    }
 
     let myName = "";
     let pendingImageData = null; // holds a compressed base64 image ready to send
@@ -385,7 +415,7 @@
       who.textContent = username + ":";
       const img = document.createElement("img");
       img.src = imageData;
-      img.addEventListener("click", () => window.open(imageData, "_blank"));
+      img.addEventListener("click", () => openLightbox(imageData));
       div.appendChild(who);
       div.appendChild(img);
       messages.appendChild(div);
@@ -425,6 +455,19 @@
     msgInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") sendMessage();
       else socket.emit("typing");
+    });
+
+    socket.on("history", (rows) => {
+      rows.forEach((m) => {
+        if (m.type === "text") addMessage(m.username, m.text);
+        else if (m.type === "image") addImageMessage(m.username, m.imageData);
+      });
+      if (rows.length > 0) {
+        const div = document.createElement("div");
+        div.className = "system";
+        div.textContent = "— wcześniejsze wiadomości —";
+        messages.insertBefore(div, messages.firstChild);
+      }
     });
 
     socket.on("chat message", (data) => {
