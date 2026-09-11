@@ -1,14 +1,18 @@
 // server.js
-// A tiny chat server. It does four jobs:
+// A tiny chat server. It does five jobs:
 //   1. Serves the chat webpage (from the "public" folder).
 //   2. Handles simple accounts: a username + password, so names can't be
 //      duplicated or stolen by someone else.
-//   3. Relays messages between everyone connected, in real time.
-//   4. Saves recent messages to a small local database so new joiners
+//   3. Remembers logged-in people via a session token, so they don't have
+//      to retype their password every time they reopen the page.
+//   4. Relays messages between everyone connected, in real time (with a
+//      basic rate limit so nobody can flood the chat).
+//   5. Saves recent messages to a small local database so new joiners
 //      can see what they missed, and messages survive a server restart.
 
 const express = require("express");
 const http = require("http");
+const crypto = require("crypto");
 const { Server } = require("socket.io");
 const Database = require("better-sqlite3");
 const bcrypt = require("bcryptjs");
@@ -25,13 +29,18 @@ const io = new Server(server, {
 app.use(express.static("public"));
 
 // --- Database setup ---
-// A single file on disk holds accounts and messages. No separate database server needed.
+// A single file on disk holds accounts, sessions, and messages.
 const db = new Database("chat.db");
 db.exec(`
   CREATE TABLE IF NOT EXISTS accounts (
     username TEXT PRIMARY KEY,   -- stored lowercase so "Bob" and "bob" can't collide
     display_name TEXT NOT NULL,  -- the name with the capitalization the user chose
     password_hash TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    username TEXT NOT NULL,      -- lowercase account key this token belongs to
+    created_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,8 +56,22 @@ const createAccount = db.prepare(
   "INSERT INTO accounts (username, display_name, password_hash) VALUES (?, ?, ?)"
 );
 
+const getSession = db.prepare("SELECT * FROM sessions WHERE token = ?");
+const createSession = db.prepare(
+  "INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)"
+);
+const deleteSession = db.prepare("DELETE FROM sessions WHERE token = ?");
+
+// Sessions "remember" a login for this many days before requiring a
+// password again, even if the browser is closed and reopened.
+const SESSION_MAX_AGE_DAYS = 30;
+const SESSION_MAX_AGE_MS = SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+
+function makeSessionToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
 // Only keep this many messages around, oldest ones get dropped.
-// Images take up a lot of space as text, so keep this modest.
 const HISTORY_LIMIT = 60;
 
 const insertMessage = db.prepare(
@@ -81,16 +104,27 @@ function loadHistory() {
 
 // Keep track of who's currently online: { socketId: displayName }
 const users = {};
-// Keep track of which usernames are currently connected, to block a second
-// simultaneous login with the same account: Set of lowercase usernames
+// Which usernames are currently connected, to block a second simultaneous
+// login with the same account: Set of lowercase usernames
 const onlineUsernames = new Set();
+// Basic spam protection: last message time per socket
+const lastMessageAt = new Map();
+const MIN_MS_BETWEEN_MESSAGES = 350;
+
+function logInSocket(socket, displayName, usernameKey) {
+  users[socket.id] = displayName;
+  onlineUsernames.add(usernameKey);
+  socket.emit("history", loadHistory());
+  io.emit("system message", `${displayName} joined the chat`);
+  io.emit("user list", Object.values(users));
+}
 
 io.on("connection", (socket) => {
   console.log("Someone connected:", socket.id);
 
-  // Login or register. If the username doesn't exist yet, this creates
-  // the account (first person to use a name "claims" it). If it exists,
-  // the password must match.
+  // Login or register with username + password. If the username doesn't
+  // exist yet, this creates the account (first person to use a name
+  // "claims" it). If it exists, the password must match.
   socket.on("auth", ({ username, password }) => {
     const cleanUsername = (username || "").trim();
     const cleanPassword = password || "";
@@ -114,7 +148,6 @@ io.on("connection", (socket) => {
         return;
       }
     } else {
-      // New account: register it now with a hashed password
       const hash = bcrypt.hashSync(cleanPassword, 10);
       createAccount.run(key, cleanUsername, hash);
     }
@@ -124,21 +157,54 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Success: log them in
     const displayName = existing ? existing.display_name : cleanUsername;
-    users[socket.id] = displayName;
-    onlineUsernames.add(key);
 
-    socket.emit("auth success", displayName);
-    socket.emit("history", loadHistory());
-    io.emit("system message", `${displayName} joined the chat`);
-    io.emit("user list", Object.values(users));
+    // Issue a "remember me" session token so next time they don't need the password
+    const token = makeSessionToken();
+    createSession.run(token, key, Date.now());
+
+    logInSocket(socket, displayName, key);
+    socket.emit("auth success", { displayName, token });
+  });
+
+  // Auto-login using a remembered session token, no password needed
+  socket.on("auth token", ({ token }) => {
+    const session = token ? getSession.get(token) : null;
+
+    if (!session || Date.now() - session.created_at > SESSION_MAX_AGE_MS) {
+      if (session) deleteSession.run(token); // expired, clean it up
+      socket.emit("auth token invalid");
+      return;
+    }
+
+    const account = getAccount.get(session.username);
+    if (!account) {
+      deleteSession.run(token);
+      socket.emit("auth token invalid");
+      return;
+    }
+
+    if (onlineUsernames.has(session.username)) {
+      socket.emit("auth token invalid"); // already logged in elsewhere
+      return;
+    }
+
+    logInSocket(socket, account.display_name, session.username);
+    socket.emit("auth success", { displayName: account.display_name, token });
+  });
+
+  // Explicit "leave chat" button
+  socket.on("logout", ({ token } = {}) => {
+    if (token) deleteSession.run(token);
+    handleLeave(socket);
   });
 
   // When a user sends a chat message
   socket.on("chat message", (text) => {
     const username = users[socket.id];
     if (!username) return; // not logged in yet, ignore
+    if (!checkRateLimit(socket)) return;
+    if (typeof text !== "string" || !text.trim()) return;
     saveMessage("text", username, text);
     io.emit("chat message", { username, text, time: Date.now() });
   });
@@ -147,7 +213,7 @@ io.on("connection", (socket) => {
   socket.on("chat image", (imageData) => {
     const username = users[socket.id];
     if (!username) return; // not logged in yet, ignore
-    // Basic sanity check: only accept actual image data URLs
+    if (!checkRateLimit(socket)) return;
     if (typeof imageData === "string" && imageData.startsWith("data:image/")) {
       saveMessage("image", username, imageData);
       io.emit("chat image", { username, imageData, time: Date.now() });
@@ -160,17 +226,33 @@ io.on("connection", (socket) => {
     if (username) socket.broadcast.emit("typing", username);
   });
 
-  // When a user disconnects
+  // When a user disconnects (closes tab, loses connection, etc.)
   socket.on("disconnect", () => {
-    const username = users[socket.id];
-    if (username) {
-      io.emit("system message", `${username} left the chat`);
-      onlineUsernames.delete(username.toLowerCase());
-      delete users[socket.id];
-      io.emit("user list", Object.values(users));
-    }
+    handleLeave(socket);
   });
 });
+
+function checkRateLimit(socket) {
+  const now = Date.now();
+  const last = lastMessageAt.get(socket.id) || 0;
+  if (now - last < MIN_MS_BETWEEN_MESSAGES) {
+    socket.emit("system message", "Zwolnij trochę! Wiadomości wysyłasz za szybko.");
+    return false;
+  }
+  lastMessageAt.set(socket.id, now);
+  return true;
+}
+
+function handleLeave(socket) {
+  const username = users[socket.id];
+  if (username) {
+    io.emit("system message", `${username} left the chat`);
+    onlineUsernames.delete(username.toLowerCase());
+    delete users[socket.id];
+    lastMessageAt.delete(socket.id);
+    io.emit("user list", Object.values(users));
+  }
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

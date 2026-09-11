@@ -19,6 +19,7 @@
 
   /* --- Join screen --- */
   #join-screen {
+    display: none;
     text-align: center;
   }
   #join-screen h1 {
@@ -57,6 +58,26 @@
     font-size: 12px;
     max-width: 320px;
     margin: 4px auto 0 auto;
+  }
+  #auto-login-screen {
+    display: none;
+    color: #999;
+    font-size: 14px;
+  }
+  #leave-btn {
+    background: none;
+    border: 1px solid #555;
+    color: #ccc;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-left: 10px;
+  }
+  #leave-btn:hover {
+    background: #3a2626;
+    border-color: #a55;
+    color: #f28b82;
   }
   #join-btn {
     padding: 10px 18px;
@@ -219,6 +240,7 @@
     }
     #chat-header h2 { font-size: 18px; }
     #online-list { font-size: 11px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #leave-btn { padding: 8px 12px; font-size: 13px; }
 
     #messages { padding: 12px; }
     .msg { font-size: 16px; margin-bottom: 14px; }
@@ -269,6 +291,9 @@
 </head>
 <body>
 
+  <!-- Shown briefly while checking for a remembered login -->
+  <div id="auto-login-screen">Logowanie...</div>
+
   <!-- Screen 1: pick a username -->
   <div id="join-screen">
     <h1>💬 WIADO</h1>
@@ -284,7 +309,10 @@
   <div id="chat-screen">
     <div id="chat-header">
       <h2>💬 WIADO</h2>
-      <div id="online-list"></div>
+      <div>
+        <span id="online-list"></span>
+        <button id="leave-btn">Wyjdź</button>
+      </div>
     </div>
     <div id="messages"></div>
     <div id="typing-indicator"></div>
@@ -327,6 +355,27 @@
     const cancelImageBtn = document.getElementById("cancel-image-btn");
     const lightbox = document.getElementById("lightbox");
     const lightboxImg = document.getElementById("lightbox-img");
+    const autoLoginScreen = document.getElementById("auto-login-screen");
+    const leaveBtn = document.getElementById("leave-btn");
+
+    const TOKEN_KEY = "wiadoToken";
+    let myToken = null;
+
+    // Decide what to show first: if we have a remembered session, try it
+    // silently instead of asking for a password again.
+    const savedToken = localStorage.getItem(TOKEN_KEY);
+    if (savedToken) {
+      autoLoginScreen.style.display = "block";
+      socket.emit("auth token", { token: savedToken });
+    } else {
+      joinScreen.style.display = "block";
+    }
+
+    socket.on("auth token invalid", () => {
+      localStorage.removeItem(TOKEN_KEY);
+      autoLoginScreen.style.display = "none";
+      joinScreen.style.display = "block";
+    });
 
     lightbox.addEventListener("click", () => lightbox.classList.remove("active"));
 
@@ -412,8 +461,11 @@
       joinBtn.disabled = false;
     });
 
-    socket.on("auth success", (displayName) => {
+    socket.on("auth success", ({ displayName, token }) => {
       myName = displayName;
+      myToken = token;
+      localStorage.setItem(TOKEN_KEY, token);
+      autoLoginScreen.style.display = "none";
       joinScreen.style.display = "none";
       chatScreen.style.display = "flex";
       msgInput.focus();
@@ -423,6 +475,21 @@
         Notification.requestPermission();
       }
     });
+
+    function leaveChat() {
+      socket.emit("logout", { token: myToken });
+      localStorage.removeItem(TOKEN_KEY);
+      myToken = null;
+      myName = "";
+      messages.innerHTML = "";
+      passwordInput.value = "";
+      chatScreen.style.display = "none";
+      autoLoginScreen.style.display = "none";
+      joinScreen.style.display = "block";
+      joinBtn.disabled = false;
+    }
+
+    leaveBtn.addEventListener("click", leaveChat);
 
     // Show a popup notification only when the person isn't looking at the tab
     function notify(title, body) {
