@@ -340,6 +340,28 @@
       joinScreen.style.display = "none";
       chatScreen.style.display = "flex";
       msgInput.focus();
+
+      // Ask permission for popup notifications once the person joins
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+    }
+
+    // Show a popup notification only when the person isn't looking at the tab
+    function notify(title, body) {
+      if (!("Notification" in window)) return;
+      if (Notification.permission !== "granted") return;
+      if (document.visibilityState === "visible") return; // they're already looking, skip it
+
+      const notification = new Notification(title, {
+        body,
+        icon: "https://cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/72x72/1f4ac.png", // speech bubble emoji
+        tag: "simple-chat-message" // reuses one popup instead of stacking many
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
     }
 
     joinBtn.addEventListener("click", join);
@@ -407,10 +429,16 @@
 
     socket.on("chat message", (data) => {
       addMessage(data.username, data.text);
+      if (data.username !== myName) {
+        notify(data.username, data.text);
+      }
     });
 
     socket.on("chat image", (data) => {
       addImageMessage(data.username, data.imageData);
+      if (data.username !== myName) {
+        notify(data.username, "📷 sent an image");
+      }
     });
 
     socket.on("system message", (text) => {
