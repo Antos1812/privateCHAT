@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Our Little Chat Lobby</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1e1f26;
+    color: #eee;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* --- Join screen --- */
+  #join-screen {
+    text-align: center;
+  }
+  #join-screen h1 {
+    margin-bottom: 8px;
+  }
+  #join-screen p {
+    color: #999;
+    margin-top: 0;
+  }
+  #name-input {
+    padding: 10px 14px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #2a2b33;
+    color: #eee;
+    margin-right: 8px;
+  }
+  #join-btn {
+    padding: 10px 18px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: none;
+    background: #5865f2;
+    color: white;
+    cursor: pointer;
+  }
+  #join-btn:hover { background: #4752c4; }
+
+  /* --- Chat screen --- */
+  #chat-screen {
+    display: none;
+    width: 100%;
+    max-width: 700px;
+    height: 90vh;
+    background: #262730;
+    border-radius: 12px;
+    overflow: hidden;
+    flex-direction: column;
+  }
+  #chat-header {
+    padding: 14px 18px;
+    background: #2f303a;
+    border-bottom: 1px solid #3a3b45;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #chat-header h2 { margin: 0; font-size: 16px; }
+  #online-list { font-size: 12px; color: #999; }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  .msg {
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+  .msg .who {
+    font-weight: 600;
+    color: #8ab4f8;
+    margin-right: 6px;
+  }
+  .msg.me .who { color: #7ee787; }
+  .system {
+    text-align: center;
+    color: #777;
+    font-size: 12px;
+    margin: 10px 0;
+  }
+  #typing-indicator {
+    font-size: 12px;
+    color: #888;
+    height: 18px;
+    padding: 0 16px;
+  }
+
+  #input-bar {
+    display: flex;
+    padding: 12px;
+    border-top: 1px solid #3a3b45;
+    gap: 8px;
+  }
+  #msg-input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #2a2b33;
+    color: #eee;
+    font-size: 15px;
+  }
+  #send-btn {
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    background: #5865f2;
+    color: white;
+    cursor: pointer;
+  }
+  #send-btn:hover { background: #4752c4; }
+</style>
+</head>
+<body>
+
+  <!-- Screen 1: pick a username -->
+  <div id="join-screen">
+    <h1>💬 The Lobby</h1>
+    <p>Pick a name to join the chat</p>
+    <input id="name-input" placeholder="Your name" maxlength="20" />
+    <button id="join-btn">Join</button>
+  </div>
+
+  <!-- Screen 2: the actual chat -->
+  <div id="chat-screen">
+    <div id="chat-header">
+      <h2>💬 The Lobby</h2>
+      <div id="online-list"></div>
+    </div>
+    <div id="messages"></div>
+    <div id="typing-indicator"></div>
+    <div id="input-bar">
+      <input id="msg-input" placeholder="Type a message..." autocomplete="off" />
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const joinScreen = document.getElementById("join-screen");
+    const chatScreen = document.getElementById("chat-screen");
+    const nameInput = document.getElementById("name-input");
+    const joinBtn = document.getElementById("join-btn");
+    const messages = document.getElementById("messages");
+    const msgInput = document.getElementById("msg-input");
+    const sendBtn = document.getElementById("send-btn");
+    const onlineList = document.getElementById("online-list");
+    const typingIndicator = document.getElementById("typing-indicator");
+
+    let myName = "";
+
+    function join() {
+      const name = nameInput.value.trim();
+      if (!name) return;
+      myName = name;
+      socket.emit("join", name);
+      joinScreen.style.display = "none";
+      chatScreen.style.display = "flex";
+      msgInput.focus();
+    }
+
+    joinBtn.addEventListener("click", join);
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") join();
+    });
+
+    function addMessage(username, text) {
+      const div = document.createElement("div");
+      div.className = "msg" + (username === myName ? " me" : "");
+      div.innerHTML = `<span class="who">${escapeHtml(username)}:</span>${escapeHtml(text)}`;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function addSystemMessage(text) {
+      const div = document.createElement("div");
+      div.className = "system";
+      div.textContent = text;
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      const d = document.createElement("div");
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text) return;
+      socket.emit("chat message", text);
+      msgInput.value = "";
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    msgInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+      else socket.emit("typing");
+    });
+
+    socket.on("chat message", (data) => {
+      addMessage(data.username, data.text);
+    });
+
+    socket.on("system message", (text) => {
+      addSystemMessage(text);
+    });
+
+    socket.on("user list", (users) => {
+      onlineList.textContent = "Online: " + users.join(", ");
+    });
+
+    let typingTimeout;
+    socket.on("typing", (username) => {
+      typingIndicator.textContent = `${username} is typing...`;
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(() => (typingIndicator.textContent = ""), 1500);
+    });
+  </script>
+</body>
+</html>

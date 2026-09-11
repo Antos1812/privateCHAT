@@ -1,0 +1,56 @@
+// server.js
+// A tiny chat server. It does two jobs:
+//   1. Serves the chat webpage (from the "public" folder).
+//   2. Relays messages between everyone connected, in real time.
+
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+// Serve everything in the "public" folder (our HTML/CSS/JS page)
+app.use(express.static("public"));
+
+// Keep track of who's online: { socketId: username }
+const users = {};
+
+io.on("connection", (socket) => {
+  console.log("Someone connected:", socket.id);
+
+  // When a user picks a name and joins
+  socket.on("join", (username) => {
+    users[socket.id] = username;
+    io.emit("system message", `${username} joined the chat`);
+    io.emit("user list", Object.values(users));
+  });
+
+  // When a user sends a chat message
+  socket.on("chat message", (text) => {
+    const username = users[socket.id] || "Unknown";
+    io.emit("chat message", { username, text, time: Date.now() });
+  });
+
+  // When someone is typing
+  socket.on("typing", () => {
+    const username = users[socket.id];
+    if (username) socket.broadcast.emit("typing", username);
+  });
+
+  // When a user disconnects
+  socket.on("disconnect", () => {
+    const username = users[socket.id];
+    if (username) {
+      io.emit("system message", `${username} left the chat`);
+      delete users[socket.id];
+      io.emit("user list", Object.values(users));
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Chat server running! Open http://localhost:${PORT} in your browser.`);
+});
