@@ -9,7 +9,11 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  // Images are sent as base64 text, which is bigger than the raw file.
+  // Raise the default limit so a few-MB photo doesn't get rejected.
+  maxHttpBufferSize: 8 * 1024 * 1024 // 8MB
+});
 
 // Serve everything in the "public" folder (our HTML/CSS/JS page)
 app.use(express.static("public"));
@@ -31,6 +35,15 @@ io.on("connection", (socket) => {
   socket.on("chat message", (text) => {
     const username = users[socket.id] || "Unknown";
     io.emit("chat message", { username, text, time: Date.now() });
+  });
+
+  // When a user sends an image (sent as a base64 data URL from the browser)
+  socket.on("chat image", (imageData) => {
+    const username = users[socket.id] || "Unknown";
+    // Basic sanity check: only accept actual image data URLs
+    if (typeof imageData === "string" && imageData.startsWith("data:image/")) {
+      io.emit("chat image", { username, imageData, time: Date.now() });
+    }
   });
 
   // When someone is typing

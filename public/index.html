@@ -84,6 +84,14 @@
     margin-right: 6px;
   }
   .msg.me .who { color: #7ee787; }
+  .msg img {
+    display: block;
+    max-width: 260px;
+    max-height: 260px;
+    border-radius: 8px;
+    margin-top: 6px;
+    cursor: pointer;
+  }
   .system {
     text-align: center;
     color: #777;
@@ -121,6 +129,38 @@
     cursor: pointer;
   }
   #send-btn:hover { background: #4752c4; }
+  #image-btn {
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #2a2b33;
+    color: #eee;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+  }
+  #image-btn:hover { background: #333542; }
+  #image-input { display: none; }
+  #image-preview-bar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: #2a2b33;
+    border-top: 1px solid #3a3b45;
+  }
+  #image-preview-bar img {
+    max-height: 50px;
+    border-radius: 6px;
+  }
+  #image-preview-bar button {
+    background: none;
+    border: 1px solid #555;
+    color: #ccc;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -141,7 +181,14 @@
     </div>
     <div id="messages"></div>
     <div id="typing-indicator"></div>
+    <div id="image-preview-bar">
+      <img id="image-preview" src="" alt="preview" />
+      <span style="font-size:12px;color:#999;">Ready to send</span>
+      <button id="cancel-image-btn">Cancel</button>
+    </div>
     <div id="input-bar">
+      <button id="image-btn" title="Send an image">📷</button>
+      <input type="file" id="image-input" accept="image/*" />
       <input id="msg-input" placeholder="Type a message..." autocomplete="off" />
       <button id="send-btn">Send</button>
     </div>
@@ -160,8 +207,71 @@
     const sendBtn = document.getElementById("send-btn");
     const onlineList = document.getElementById("online-list");
     const typingIndicator = document.getElementById("typing-indicator");
+    const imageBtn = document.getElementById("image-btn");
+    const imageInput = document.getElementById("image-input");
+    const imagePreviewBar = document.getElementById("image-preview-bar");
+    const imagePreview = document.getElementById("image-preview");
+    const cancelImageBtn = document.getElementById("cancel-image-btn");
 
     let myName = "";
+    let pendingImageData = null; // holds a compressed base64 image ready to send
+
+    const MAX_IMAGE_DIMENSION = 1000; // pixels, longest side
+    const JPEG_QUALITY = 0.7;
+
+    // Shrink and compress the image in the browser before sending, so a
+    // 12MB phone photo doesn't clog the chat for everyone else.
+    function compressImage(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            let { width, height } = img;
+            if (width > height && width > MAX_IMAGE_DIMENSION) {
+              height = Math.round((height * MAX_IMAGE_DIMENSION) / width);
+              width = MAX_IMAGE_DIMENSION;
+            } else if (height > MAX_IMAGE_DIMENSION) {
+              width = Math.round((width * MAX_IMAGE_DIMENSION) / height);
+              height = MAX_IMAGE_DIMENSION;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL("image/jpeg", JPEG_QUALITY));
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    imageBtn.addEventListener("click", () => imageInput.click());
+
+    imageInput.addEventListener("change", async () => {
+      const file = imageInput.files[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        alert("Please choose an image file.");
+        return;
+      }
+      try {
+        pendingImageData = await compressImage(file);
+        imagePreview.src = pendingImageData;
+        imagePreviewBar.style.display = "flex";
+      } catch (err) {
+        alert("Couldn't load that image, try a different one.");
+      }
+    });
+
+    cancelImageBtn.addEventListener("click", () => {
+      pendingImageData = null;
+      imageInput.value = "";
+      imagePreviewBar.style.display = "none";
+    });
 
     function join() {
       const name = nameInput.value.trim();
@@ -186,6 +296,21 @@
       messages.scrollTop = messages.scrollHeight;
     }
 
+    function addImageMessage(username, imageData) {
+      const div = document.createElement("div");
+      div.className = "msg" + (username === myName ? " me" : "");
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = username + ":";
+      const img = document.createElement("img");
+      img.src = imageData;
+      img.addEventListener("click", () => window.open(imageData, "_blank"));
+      div.appendChild(who);
+      div.appendChild(img);
+      messages.appendChild(div);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
     function addSystemMessage(text) {
       const div = document.createElement("div");
       div.className = "system";
@@ -201,10 +326,18 @@
     }
 
     function sendMessage() {
+      // If an image is staged, send that first (its own message)
+      if (pendingImageData) {
+        socket.emit("chat image", pendingImageData);
+        pendingImageData = null;
+        imageInput.value = "";
+        imagePreviewBar.style.display = "none";
+      }
       const text = msgInput.value.trim();
-      if (!text) return;
-      socket.emit("chat message", text);
-      msgInput.value = "";
+      if (text) {
+        socket.emit("chat message", text);
+        msgInput.value = "";
+      }
     }
 
     sendBtn.addEventListener("click", sendMessage);
@@ -215,6 +348,10 @@
 
     socket.on("chat message", (data) => {
       addMessage(data.username, data.text);
+    });
+
+    socket.on("chat image", (data) => {
+      addImageMessage(data.username, data.imageData);
     });
 
     socket.on("system message", (text) => {
