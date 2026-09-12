@@ -170,6 +170,46 @@
     padding: 12px;
     border-top: 1px solid #3a3b45;
     gap: 8px;
+    position: relative;
+  }
+  #mention-suggestions {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 12px;
+    right: 12px;
+    background: #2f303a;
+    border: 1px solid #444;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  #mention-suggestions.active { display: block; }
+  #mention-suggestions .mention-option {
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #mention-suggestions .mention-option.selected,
+  #mention-suggestions .mention-option:hover {
+    background: #5865f2;
+    color: white;
+  }
+  .mention {
+    background: rgba(88, 101, 242, 0.25);
+    color: #8ab4f8;
+    border-radius: 4px;
+    padding: 1px 4px;
+    font-weight: 600;
+  }
+  .msg.mentions-me {
+    background: rgba(88, 101, 242, 0.12);
+    border-left: 3px solid #5865f2;
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-left: -10px;
   }
   #msg-input {
     flex: 1;
@@ -322,6 +362,7 @@
       <button id="cancel-image-btn">Usuń</button>
     </div>
     <div id="input-bar">
+      <div id="mention-suggestions"></div>
       <button id="image-btn" title="Wyślij zdjęcie">📷</button>
       <input type="file" id="image-input" accept="image/*" />
       <input id="msg-input" placeholder="Napisz wiadomość..." autocomplete="off" />
@@ -385,6 +426,7 @@
     }
 
     let myName = "";
+    let onlineUsersList = [];
     let pendingImageData = null; // holds a compressed base64 image ready to send
 
     const MAX_IMAGE_DIMENSION = 1000; // pixels, longest side
@@ -518,8 +560,10 @@
 
     function addMessage(username, text) {
       const div = document.createElement("div");
-      div.className = "msg" + (username === myName ? " me" : "");
-      div.innerHTML = `<span class="who">${escapeHtml(username)}:</span>${escapeHtml(text)}`;
+      let className = "msg" + (username === myName ? " me" : "");
+      if (mentionsMe(text)) className += " mentions-me";
+      div.className = className;
+      div.innerHTML = `<span class="who">${escapeHtml(username)}:</span>${formatMentions(text)}`;
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
     }
@@ -553,6 +597,76 @@
       return d.innerHTML;
     }
 
+    // --- @mentions ---
+    const mentionBox = document.getElementById("mention-suggestions");
+    let mentionMatches = [];
+    let mentionSelectedIndex = 0;
+
+    function getMentionQuery() {
+      // Looks for an "@word" right at the end of whatever's typed so far
+      const match = msgInput.value.match(/(^|\s)@([a-zA-Z0-9_]{0,20})$/);
+      return match ? match[2] : null;
+    }
+
+    function updateMentionSuggestions() {
+      const query = getMentionQuery();
+      if (query === null) {
+        hideMentionBox();
+        return;
+      }
+      const lowerQuery = query.toLowerCase();
+      mentionMatches = onlineUsersList.filter((u) => u.toLowerCase().startsWith(lowerQuery));
+      if (mentionMatches.length === 0) {
+        hideMentionBox();
+        return;
+      }
+      mentionSelectedIndex = 0;
+      renderMentionBox();
+    }
+
+    function renderMentionBox() {
+      mentionBox.innerHTML = "";
+      mentionMatches.forEach((name, i) => {
+        const div = document.createElement("div");
+        div.className = "mention-option" + (i === mentionSelectedIndex ? " selected" : "");
+        div.textContent = name;
+        div.addEventListener("mousedown", (e) => {
+          e.preventDefault(); // keep focus on input
+          applyMention(name);
+        });
+        mentionBox.appendChild(div);
+      });
+      mentionBox.classList.add("active");
+    }
+
+    function hideMentionBox() {
+      mentionBox.classList.remove("active");
+      mentionMatches = [];
+    }
+
+    function applyMention(name) {
+      msgInput.value = msgInput.value.replace(/(^|\s)@([a-zA-Z0-9_]{0,20})$/, `$1@${name} `);
+      hideMentionBox();
+      msgInput.focus();
+    }
+
+    // Wraps @Name in a message with a highlighted span, if Name is a real user
+    function formatMentions(text) {
+      let html = escapeHtml(text);
+      html = html.replace(/(^|\s)@([a-zA-Z0-9_]{1,20})/g, (full, lead, name) => {
+        const isRealUser = onlineUsersList.some((u) => u.toLowerCase() === name.toLowerCase());
+        if (!isRealUser) return full;
+        return `${lead}<span class="mention">@${escapeHtml(name)}</span>`;
+      });
+      return html;
+    }
+
+    function mentionsMe(text) {
+      if (!myName) return false;
+      const re = new RegExp(`(^|\\s)@${myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`, "i");
+      return re.test(text);
+    }
+
     function sendMessage() {
       // If an image is staged, send that first (its own message)
       if (pendingImageData) {
@@ -565,11 +679,37 @@
       if (text) {
         socket.emit("chat message", text);
         msgInput.value = "";
+        hideMentionBox();
       }
     }
 
     sendBtn.addEventListener("click", sendMessage);
+    msgInput.addEventListener("input", updateMentionSuggestions);
+    msgInput.addEventListener("blur", () => setTimeout(hideMentionBox, 150));
     msgInput.addEventListener("keydown", (e) => {
+      if (mentionBox.classList.contains("active")) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          mentionSelectedIndex = (mentionSelectedIndex + 1) % mentionMatches.length;
+          renderMentionBox();
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          mentionSelectedIndex = (mentionSelectedIndex - 1 + mentionMatches.length) % mentionMatches.length;
+          renderMentionBox();
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyMention(mentionMatches[mentionSelectedIndex]);
+          return;
+        }
+        if (e.key === "Escape") {
+          hideMentionBox();
+          return;
+        }
+      }
       if (e.key === "Enter") sendMessage();
       else socket.emit("typing");
     });
@@ -590,7 +730,11 @@
     socket.on("chat message", (data) => {
       addMessage(data.username, data.text);
       if (data.username !== myName) {
-        notify(data.username, data.text);
+        if (mentionsMe(data.text)) {
+          notify(`${data.username} oznaczył(a) Cię`, data.text);
+        } else {
+          notify(data.username, data.text);
+        }
       }
     });
 
@@ -606,6 +750,7 @@
     });
 
     socket.on("user list", (users) => {
+      onlineUsersList = users;
       onlineList.textContent = "Online: " + users.join(", ");
     });
 
