@@ -427,6 +427,9 @@
 
     let myName = "";
     let onlineUsersList = [];
+    let sentHistory = []; // messages you've sent this session, for the Up-arrow recall
+    let historyIndex = -1; // -1 means "not currently browsing history"
+    let draftBeforeHistory = "";
     let pendingImageData = null; // holds a compressed base64 image ready to send
 
     const MAX_IMAGE_DIMENSION = 1000; // pixels, longest side
@@ -678,13 +681,18 @@
       const text = msgInput.value.trim();
       if (text) {
         socket.emit("chat message", text);
+        sentHistory.push(text);
+        historyIndex = -1;
         msgInput.value = "";
         hideMentionBox();
       }
     }
 
     sendBtn.addEventListener("click", sendMessage);
-    msgInput.addEventListener("input", updateMentionSuggestions);
+    msgInput.addEventListener("input", () => {
+      historyIndex = -1; // typing manually cancels history browsing
+      updateMentionSuggestions();
+    });
     msgInput.addEventListener("blur", () => setTimeout(hideMentionBox, 150));
     msgInput.addEventListener("keydown", (e) => {
       if (mentionBox.classList.contains("active")) {
@@ -710,6 +718,35 @@
           return;
         }
       }
+
+      // Recall previously sent messages with Up/Down, like a terminal
+      if (e.key === "ArrowUp") {
+        if (sentHistory.length === 0) return;
+        e.preventDefault();
+        if (historyIndex === -1) {
+          draftBeforeHistory = msgInput.value;
+          historyIndex = sentHistory.length - 1;
+        } else if (historyIndex > 0) {
+          historyIndex--;
+        }
+        msgInput.value = sentHistory[historyIndex];
+        msgInput.setSelectionRange(msgInput.value.length, msgInput.value.length);
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        if (historyIndex === -1) return; // nothing being browsed, do nothing special
+        e.preventDefault();
+        if (historyIndex < sentHistory.length - 1) {
+          historyIndex++;
+          msgInput.value = sentHistory[historyIndex];
+        } else {
+          historyIndex = -1;
+          msgInput.value = draftBeforeHistory;
+        }
+        msgInput.setSelectionRange(msgInput.value.length, msgInput.value.length);
+        return;
+      }
+
       if (e.key === "Enter") sendMessage();
       else socket.emit("typing");
     });
