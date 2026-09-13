@@ -17,7 +17,6 @@
     justify-content: center;
   }
 
-  /* --- Join screen --- */
   #join-screen {
     display: none;
     text-align: center;
@@ -90,7 +89,6 @@
   }
   #join-btn:hover { background: #4752c4; }
 
-  /* --- Chat screen --- */
   #chat-screen {
     display: none;
     width: 100%;
@@ -289,11 +287,10 @@
     #input-bar {
       padding: 10px;
       gap: 6px;
-      /* keep the bar clear of the iPhone home-swipe area */
       padding-bottom: max(10px, env(safe-area-inset-bottom));
     }
     #msg-input {
-      font-size: 16px; /* 16px+ stops iOS from auto-zooming in on focus */
+      font-size: 16px;
       padding: 12px 14px;
     }
     #send-btn {
@@ -329,12 +326,9 @@
   }
 </style>
 </head>
-<body>
-
-  <!-- Shown briefly while checking for a remembered login -->
+<body>  
   <div id="auto-login-screen">Logowanie...</div>
 
-  <!-- Screen 1: pick a username -->
   <div id="join-screen">
     <h1>💬 WIADO</h1>
     <p>Wybierz nazwę</p>
@@ -345,7 +339,6 @@
     <p id="auth-hint">Pierwsze logowanie zakłada konto na tę nazwę — zapamiętaj hasło!</p>
   </div>
 
-  <!-- Screen 2: the actual chat -->
   <div id="chat-screen">
     <div id="chat-header">
       <h2>💬 WIADO</h2>
@@ -600,13 +593,11 @@
       return d.innerHTML;
     }
 
-    // --- @mentions ---
     const mentionBox = document.getElementById("mention-suggestions");
     let mentionMatches = [];
     let mentionSelectedIndex = 0;
 
     function getMentionQuery() {
-      // Looks for an "@word" right at the end of whatever's typed so far
       const match = msgInput.value.match(/(^|\s)@([a-zA-Z0-9_]{0,20})$/);
       return match ? match[2] : null;
     }
@@ -634,7 +625,7 @@
         div.className = "mention-option" + (i === mentionSelectedIndex ? " selected" : "");
         div.textContent = name;
         div.addEventListener("mousedown", (e) => {
-          e.preventDefault(); // keep focus on input
+          e.preventDefault(); 
           applyMention(name);
         });
         mentionBox.appendChild(div);
@@ -653,7 +644,6 @@
       msgInput.focus();
     }
 
-    // Wraps @Name in a message with a highlighted span, if Name is a real user
     function formatMentions(text) {
       let html = escapeHtml(text);
       html = html.replace(/(^|\s)@([a-zA-Z0-9_]{1,20})/g, (full, lead, name) => {
@@ -671,7 +661,6 @@
     }
 
     function sendMessage() {
-      // If an image is staged, send that first (its own message)
       if (pendingImageData) {
         socket.emit("chat image", pendingImageData);
         pendingImageData = null;
@@ -719,7 +708,6 @@
         }
       }
 
-      // Recall previously sent messages with Up/Down, like a terminal
       if (e.key === "ArrowUp") {
         if (sentHistory.length === 0) return;
         e.preventDefault();
@@ -734,7 +722,7 @@
         return;
       }
       if (e.key === "ArrowDown") {
-        if (historyIndex === -1) return; // nothing being browsed, do nothing special
+        if (historyIndex === -1) return; 
         e.preventDefault();
         if (historyIndex < sentHistory.length - 1) {
           historyIndex++;
